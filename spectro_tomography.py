@@ -1,12 +1,12 @@
 import astra
 import numpy as np
 from matplotlib import pyplot as plt
-from scipy.sparse.linalg import gmres, LinearOperator
+from scipy.sparse.linalg import gmres, LinearOperator, lsqr, lsmr, cg, cgs, bicg, bicgstab, minres, spsolve, lgmres, qmr
 import scipy
 from phantominator import shepp_logan
 import tifffile as tf
 from tqdm.auto import tqdm
-
+from skimage.metrics import mean_squared_error as mse
 
 def generate_plan(ref,angle_rng,num_angle,option):
     num_energy, num_state = np.shape(ref)
@@ -17,6 +17,18 @@ def generate_plan(ref,angle_rng,num_angle,option):
     spectra_list = []    
     ind = []
     if option == 'uniform-interlaced': 
+        angle_list = np.linspace(angle_rng[0],angle_rng[1],num_angle)
+        for i in range(multiplicity):
+            if len(spectra_list) == 0:
+                spectra_list = ref
+            else:
+                spectra_list = np.concatenate((spectra_list,ref),axis = 0) 
+        if len(spectra_list) == 0:
+            spectra_list = spectra_list,ref[:remainder,:]
+        else:
+            spectra_list = np.concatenate((spectra_list,ref[:remainder,:]),axis = 0)
+    elif option == 'uniform-interlaced-random': 
+        np.random.shuffle(ref)
         angle_list = np.linspace(angle_rng[0],angle_rng[1],num_angle)
         for i in range(multiplicity):
             if len(spectra_list) == 0:
@@ -130,8 +142,11 @@ def rand_list(input_list):
     return output_list
     
 
-def multistate_tomo_joint_TV(sinogram, angle, rot_cen_offset, obj_size, ref, mu1, mu2,max_iter,x0=None,nonnegative=False,seq_save=False):
+def multistate_tomo_joint_TV(sinogram, angle, rot_cen_offset, obj_size, ref, 
+                             mu1, mu2,max_iter,x0=None,nonnegative=False,
+                             seq_save=False, method='gmres',**kwargs):
 #     regularization with TV: L1 norm of gradients
+
     num_proj, det_size = np.shape(sinogram)
     num_proj, num_state = np.shape(ref)
     
@@ -150,6 +165,24 @@ def multistate_tomo_joint_TV(sinogram, angle, rot_cen_offset, obj_size, ref, mu1
     def DtDx(x):
         return DtD@x
     DtD_op = LinearOperator((rec_size,rec_size), matvec = DtDx)
+    
+    solvers = {
+        "spsolve": lambda A, b, **kw: (spsolve(A, b), 0),
+        "cg": cg,
+        "bicg": bicg,
+        "cgs": cgs,
+        "bicgstab": bicgstab,
+        "gmres": gmres,
+        "minres": minres,
+        "lsqr": lsqr,
+        "lsmr": lsmr,
+        "lgmres": lgmres,
+        "qmr": qmr,
+    }
+    
+    if method not in solvers:
+        raise ValueError(f"Unknown solver '{method}'. Available: {list(solvers)}")
+    solver = solvers[method]
     
     # create linear operators from ref
     W = []
@@ -211,13 +244,13 @@ def multistate_tomo_joint_TV(sinogram, angle, rot_cen_offset, obj_size, ref, mu1
             return output
         return joint_op
     F = make_joint_op(A,W,DtD_op,rec_size)
-    F_OP = LinearOperator((rec_size*num_state,rec_size*num_state),matvec=F)
+    F_OP = LinearOperator((rec_size*num_state,rec_size*num_state),matvec=F,rmatvec=F)
     seq = []
     for itr in tqdm(range(max_iter)):
         C = []
         for i in range(num_state):
             C = np.concatenate((C,(Dx.T@ux[i]+Dy.T@uy[i]) - mu2*(Dx.T@zx[i]+Dy.T@zy[i])))
-        X = gmres(F_OP,B-C,X)[0]    
+        X = solver(F_OP,B-C,x0=X)[0]    
         if nonnegative:
             X[X<0] = 0
         for i in range(num_state):    
