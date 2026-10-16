@@ -156,6 +156,8 @@ For GPU volumes, use `backend="gpu"` and `gpu_ids=(...)`; workers are assigned
 to the listed devices round-robin. Each worker builds its own reconstructor, so
 choose the worker count with GPU memory use in mind.
 
+More examples of fast reconstruction are provided in test_fast_reconstruction and Example_test_sample.
+
 ### Acquisition Plan Generation
 
 Generate sampling plans for spectroscopic tomography experiments:
